@@ -27,10 +27,8 @@ class DataWarAndPeace():
     def split_data(self):
         train_data = self.data[:int(len(self.data)*0.9)]
         test_data = self.data[int(len(self.data)*0.9):]
-        train_data = tf.data.experimental.from_list(
-            elements=train_data)
-        test_data = tf.data.experimental.from_list(
-            elements=test_data)
+        train_data = tf.data.Dataset.from_tensor_slices(train_data)
+        test_data = tf.data.Dataset.from_tensor_slices(test_data)
         return train_data, test_data
 
     # remove vowels from input
