@@ -10,8 +10,10 @@ from IPython.display import clear_output
 import data
 tf.multiply(2,3)
 from warprnnt_tensorflow import rnnt_loss
-clear_output()
 import string
+from tqdm import tqdm
+clear_output()
+
 
 
 class Encoder(tf.keras.Model):
@@ -20,13 +22,17 @@ class Encoder(tf.keras.Model):
         self.num_inputs = num_inputs
         self.dropout = dropout
         self.embedding = tf.keras.layers.Embedding(num_inputs, encoder_dim)
-        self.gru = tf.keras.layers.GRU(encoder_dim, return_sequences=True, dropout=self.dropout)
+        self.gru1 = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(encoder_dim, return_sequences=True, dropout=self.dropout))
+        self.gru2 = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(encoder_dim, return_sequences=True, dropout=self.dropout))
+        self.gru3 = tf.keras.layers.Bidirectional(tf.keras.layers.GRU(encoder_dim, return_sequences=True, dropout=self.dropout))
         self.linear = tf.keras.layers.Dense(encoder_dim)
 
 
     def call(self, x):
         x = self.embedding(x)
-        x = self.gru(x)
+        x = self.gru1(x)
+        x = self.gru2(x)
+        x = self.gru3(x)
         x = self.linear(x)
         return x
 
@@ -76,10 +82,10 @@ class Joiner(tf.keras.Model):
 
     def call(self, inputs):
         encoder_out, predictor_out = inputs
-        encoder_out = tf.tile(tf.expand_dims(encoder_out, axis=2), [1, 1, int(self.maxU+1), 1])
-        predictor_out = tf.tile(tf.expand_dims(predictor_out, axis=1), [1, int(self.maxT), 1, 1])
-        concat = tf.concat([encoder_out, predictor_out], axis=3)
-        out = self.linear(concat)
+      
+        # Trước chỗ  này Long để  là tf.concat nên sai ngu v~ :v
+        joiner_input = encoder_out + predictor_out
+        out = self.linear(joiner_input)
         return out
 
 
@@ -114,6 +120,8 @@ class TransducerModel(tf.keras.Model):
         x, y, T, U = inputs
         encoder_out = self.encoder(x)
         predictor_out = self.predictor(y)
+        encoder_out = tf.expand_dims(encoder_out, axis=2)
+        predictor_out = tf.expand_dims(predictor_out, axis=1)
         out = self.joiner([encoder_out, predictor_out])
         logits = out
 
@@ -127,16 +135,78 @@ class TransducerModel(tf.keras.Model):
         T = tf.cast(T, tf.int32)
         U = tf.cast(U, tf.int32)
 
-        losses = rnnt_loss(logits, y, T, U)
+        # losses = rnnt_loss(logits, y, T, U)
+
+        return logits
+    
+    def compute_loss(self, x, y, T, U):
+        x = tf.cast(x, tf.float32)
+        y = tf.cast(y, tf.int32)
+        T = tf.cast(T, tf.int32)
+        U = tf.cast(U, tf.int32)
+
+        losses = rnnt_loss(x, y, T, U)
+        losses = tf.reduce_mean(losses)   
+
+        return losses     
+    
+    
+    def greedy_decode(self, x, T, U_max):
+        y_batch = []
+        B = len(x)
+        encoder_out = self.encoder(x)
+        for b in range(B):
+            t = 0
+            u = 0
+            y = [self.predictor.start_symbol]
+            predictor_state = tf.expand_dims(model.predictor.initial_state, axis=0)
+
+            while t < T[b] and u < U_max:
+                predictor_input = tf.expand_dims(tf.Variable(y[-1]), axis=0)
+                g_u, predictor_state = self.predictor.one_step_forward(predictor_input, predictor_state)
+                f_t = tf.expand_dims(encoder_out[0, 0], axis=0)
+                h_t_u = model.joiner([f_t, g_u])
+                # find max index in h_t_u
+                maxarg = tf.argmax(h_t_u, axis=1)
+                max_index = int(maxarg[0])
+                if max_index == NULL_INDEX:
+                    t += 1
+                else:  # is label
+                    u += 1
+                    y.append(max_index)
+            y_batch.append(y[1:])   # remove start symbol
+        return y_batch 
+
+
+class RNNTLoss(tf.keras.losses.Loss):
+    def __init__(self, **kwargs):
+        super(RNNTLoss, self).__init__(**kwargs)
+
+    def call(self, y_true, y_pred):
+        x = tf.cast(y_true[0], tf.float32)
+        y = tf.cast(y_pred, tf.int32)
+        T = tf.cast(y_true[1], tf.int32)
+        U = tf.cast(y_true[2], tf.int32)
+
+        
+
+        losses = rnnt_loss(x, y, T, U)
+        losses = tf.reduce_mean(losses)   
 
         return losses
-        
+    
+    def get_config(self):
+        return super().get_config()
+
+
+
 
 import data
 import copy
-test_data = False
-if test_data == True:
-    file_path = "/build/Desktop/RNNT-for-Vowel-Complete/data/war_and_peace.txt"
+test_data = 2
+
+if test_data == 0:
+    file_path = "/build/data/war_and_peace.txt"
     data = data.DataWarAndPeace(file_path)
     train_data, test_data = data.train_data, data.test_data
     for i in train_data.take(1):
@@ -158,8 +228,8 @@ if test_data == True:
     predictor_dim = 1024
     joiner_dim = 1024
     NULL_INDEX = 0
-    maxT = 71
-    maxU = 74
+    maxT = data.max_input_length
+    maxU = data.max_output_length
 
 
     model = TransducerModel(num_inputs,
@@ -171,12 +241,12 @@ if test_data == True:
                             maxT,
                             maxU)
 
-    testJoin = model((x,y,T,U))
-    print("Log values: ", testJoin)
-    print_text = "log_probs shape: {}, labels shape: {}".format(testJoin.shape, y.shape)
-    print(print_text)
-    print(y[0])
-else:
+    output = model((x,y,T,U))
+    loss_val = model.compute_loss(output, y, T, U)
+    print("output.shape: ", output.shape)
+    print("loss values: ", loss_val)
+    
+elif test_data == 1:
     for i in range(10):
         import string
         y_letters = "CAT"
@@ -211,9 +281,96 @@ else:
                                 maxT,
                                 maxU)
 
-        loss = model((x,y, tf.Variable(T), tf.Variable(U)))
-        print_text = "log_probs shape: {}, labels shape: {}".format(loss.shape, y.shape)
+        preditor_output = model((x,y, tf.Variable(T), tf.Variable(U)))
+        print(preditor_output.shape)
+        loss = model.compute_loss(preditor_output, y, tf.Variable(T), tf.Variable(U))
         print(loss)
-        # print(print_text)
 
+elif test_data == 2:
+
+    # Get Data Object
+    file_path = "/build/data/war_and_peace.txt"
+    data = data.DataWarAndPeace(file_path)
+    train_data, test_data = data.train_data, data.test_data
+
+    # Hyper parameters
+    num_inputs = len(vocab)+1
+    encoder_dim = 1024
+    num_outputs = len(vocab)+1
+    predictor_dim = 1024
+    joiner_dim = 1024
+    NULL_INDEX = 0
+    maxT = data.max_input_length
+    maxU = data.max_output_length
+
+    # Define Model
+    model = TransducerModel(num_inputs,
+                            encoder_dim,
+                            num_outputs,
+                            predictor_dim,
+                            joiner_dim,
+                            NULL_INDEX,
+                            maxT,
+                            maxU)
     
+    # Define Loss
+    loss_fn = RNNTLoss()
+
+    # Define optimizer
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
+
+    epochs = 6
+
+    for epoch in range(epochs):
+        print("Epoch: {}/{}".format(epoch, epochs))
+        pbar = tqdm(train_data)
+        for i in pbar:
+            with tf.GradientTape() as tape:
+                x = copy.deepcopy(i[0])
+                y = copy.deepcopy(i[1])
+                T = copy.deepcopy(i[2])
+                U = copy.deepcopy(i[3])
+                output = model((x,y,T,U), training=True)
+                loss_val = loss_fn((output, T, U), y)
+            
+
+            gradients = tape.gradient(loss_val, model.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+            pbar.set_description("Loss: {}".format(loss_val.numpy()))
+
+        # save model
+
+        model.save_weights("weights/" + "model_epoch" + str(epoch) + ".h5")
+
+elif test_data == 3:
+
+    # Get Data Object
+    file_path = "/build/data/war_and_peace.txt"
+    data = data.DataWarAndPeace(file_path)
+    train_data, test_data = data.train_data, data.test_data
+
+    # Hyper parameters
+    num_inputs = len(vocab)+1
+    encoder_dim = 1024
+    num_outputs = len(vocab)+1
+    predictor_dim = 1024
+    joiner_dim = 1024
+    NULL_INDEX = 0
+    maxT = data.max_input_length
+    maxU = data.max_output_length
+
+    # Define Model
+    model = TransducerModel(num_inputs,
+                            encoder_dim,
+                            num_outputs,
+                            predictor_dim,
+                            joiner_dim,
+                            NULL_INDEX,
+                            maxT,
+                            maxU)
+    
+    # load weights
+    model.load_weights("weights/model_epoch5.h5")
+
+

@@ -76,10 +76,10 @@ class Joiner(tf.keras.Model):
 
     def call(self, inputs):
         encoder_out, predictor_out = inputs
-        encoder_out = tf.tile(tf.expand_dims(encoder_out, axis=2), [1, 1, int(self.maxU+1), 1])
-        predictor_out = tf.tile(tf.expand_dims(predictor_out, axis=1), [1, int(self.maxT), 1, 1])
-        concat = tf.concat([encoder_out, predictor_out], axis=3)
-        out = self.linear(concat)
+ 
+        # Trước chỗ  này Long để  là tf.concat nên sai ngu v~ :v
+        joiner_input = encoder_out + predictor_out
+        out = self.linear(joiner_input)
         return out
 
 
@@ -114,12 +114,10 @@ class TransducerModel(tf.keras.Model):
         x, y, T, U = inputs
         encoder_out = self.encoder(x)
         predictor_out = self.predictor(y)
+        encoder_out = tf.expand_dims(encoder_out, axis=2)
+        predictor_out = tf.expand_dims(predictor_out, axis=1)
         out = self.joiner([encoder_out, predictor_out])
         logits = out
-
-        # print("encoder_out.shape: ", encoder_out.shape)
-        # print("predictor_out.shape: ", predictor_out.shape)
-        # print("joiner.shape: ", out.shape)
 
         # competitive dtype
         logits = tf.cast(logits, tf.float32)
@@ -127,16 +125,67 @@ class TransducerModel(tf.keras.Model):
         T = tf.cast(T, tf.int32)
         U = tf.cast(U, tf.int32)
 
-        losses = rnnt_loss(logits, y, T, U)
+        return logits
+    
+    def greedy_decode(self, x, T, U_max):
+        y_batch = []
+        B = len(x)
+        encoder_out = self.encoder(x)
+        for b in range(B):
+            t = 0
+            u = 0
+            y = [self.predictor.start_symbol]
+            predictor_state = tf.expand_dims(model.predictor.initial_state, axis=0)
+
+            while t < T[b] and u < U_max:
+                predictor_input = tf.expand_dims(tf.Variable(y[-1]), axis=0)
+                g_u, predictor_state = self.predictor.one_step_forward(predictor_input, predictor_state)
+                f_t = tf.expand_dims(encoder_out[0, 0], axis=0)
+                h_t_u = model.joiner([f_t, g_u])
+                # find max index in h_t_u
+                maxarg = tf.argmax(h_t_u, axis=1)
+                max_index = int(maxarg[0])
+                if max_index == NULL_INDEX:
+                    t += 1
+                else:  # is label
+                    u += 1
+                    y.append(max_index)
+            y_batch.append(y[1:])   # remove start symbol
+        return y_batch           
+
+
+
+
+class RNNTLoss(tf.keras.losses.Loss):
+    def __init__(self, **kwargs):
+        super(RNNTLoss, self).__init__(**kwargs)
+
+    def call(self, y_true, y_pred):
+        x = tf.cast(y_true[0], tf.float32)
+        y = tf.cast(y_pred, tf.int32)
+        T = tf.cast(y_true[1], tf.int32)
+        U = tf.cast(y_true[2], tf.int32)
+
+        
+
+        losses = rnnt_loss(x, y, T, U)
+        losses = tf.reduce_mean(losses)   
 
         return losses
-        
+    
+    def get_config(self):
+        return super().get_config()
+
+
+
+# def greedy_decode()
+    
 
 import data
 import copy
 test_data = False
 if test_data == True:
-    file_path = "/build/Desktop/RNNT-for-Vowel-Complete/data/war_and_peace.txt"
+    file_path = "/build/data/war_and_peace.txt"
     data = data.DataWarAndPeace(file_path)
     train_data, test_data = data.train_data, data.test_data
     for i in train_data.take(1):
@@ -158,8 +207,8 @@ if test_data == True:
     predictor_dim = 1024
     joiner_dim = 1024
     NULL_INDEX = 0
-    maxT = 71
-    maxU = 74
+    maxT = data.max_input_length
+    maxU = data.max_output_length
 
 
     model = TransducerModel(num_inputs,
@@ -172,12 +221,11 @@ if test_data == True:
                             maxU)
 
     testJoin = model((x,y,T,U))
-    print("Log values: ", testJoin)
+    # print("Log values: ", testJoin)
     print_text = "log_probs shape: {}, labels shape: {}".format(testJoin.shape, y.shape)
-    print(print_text)
-    print(y[0])
+    print(len(x))
 else:
-    for i in range(10):
+    for i in range(1):
         import string
         y_letters = "CAT"
         y = tf.expand_dims(tf.Variable([string.ascii_uppercase.index(l) + 1 for l in y_letters]), axis=0)
@@ -211,9 +259,28 @@ else:
                                 maxT,
                                 maxU)
 
-        loss = model((x,y, tf.Variable(T), tf.Variable(U)))
-        print_text = "log_probs shape: {}, labels shape: {}".format(loss.shape, y.shape)
-        print(loss)
+        # prob = model((x,y, tf.Variable(T), tf.Variable(U)))
+        # print_text = "log_probs shape: {}, labels shape: {}".format(prob.shape, y.shape)
+        # print(prob)
         # print(print_text)
+        x = model.greedy_decode(x, T, U)
+        print(x)
+        # encoder_out = model.encoder(x)
+        # y_pred = [model.predictor.start_symbol]
+        # predictor_input = tf.expand_dims(tf.Variable(y_pred[-1]), axis=0)
+        # predictor_state = tf.expand_dims(model.predictor.initial_state, axis=0)
+        # g_u, predictor_state = model.predictor.one_step_forward(predictor_input, predictor_state)
+        # f_t = tf.expand_dims(encoder_out[0, 0], axis=0)
+        # h_t_u = model.joiner([f_t, g_u])
+        # # find max index in h_t_u
+        # max_index = tf.argmax(h_t_u, axis=1)
 
+
+        # print(predictor_input.shape)
+        # print(predictor_state.shape)
+        # print(g_u.shape)
+        # print(f_t.shape)
+        # print(h_t_u.shape)
+        # print(h_t_u)
+        # print(max_index)
     

@@ -11,9 +11,9 @@ class DataWarAndPeace():
         self.data = self.load_data()
         self.NULL_INDEX = 0
         self.vocab = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r\x0b\x0c'
-        self.max_input_length = 71
-        self.max_output_length = 74
-        self.batch_size = 4
+        self.max_input_length = 80
+        self.max_output_length = 80
+        self.batch_size = 16
         self.train_data, self.test_data = self.get_data()
 
     def get_label_input(self, line):
@@ -86,12 +86,7 @@ class DataWarAndPeace():
                     self.padding(label, self.max_output_length), 
                     input_length, 
                     label_length))
-        # test_data = test_data.map(
-        #     lambda input, label, input_length, label_length:
-        #             (self.padding(input, 71),
-        #             self.padding(label, 74),
-        #             input_length,
-        #             label_length))
+    
 
         train_data = train_data.batch(self.batch_size)
 
@@ -105,12 +100,11 @@ class DataWarAndPeace():
 
 
 if __name__=='__main__':
-    file_path = "/home/adminvbdi/Desktop/RNNT-for-Vowel-Complete/data/war_and_peace.txt"
+    file_path = "/build/data/war_and_peace.txt"
     data = DataWarAndPeace(file_path)
     train_data, test_data = data.train_data, data.test_data
-    for i in train_data.take(1):
-        print(i[0].shape)
-        print(i[1].shape)
-        print(i[2])
-        print(i[3])
+    count = 0
+    for count, i in enumerate(train_data):
+        pass
+    print(count)
 
